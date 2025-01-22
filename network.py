@@ -49,7 +49,7 @@ class Reconstructor(tf.Module):
 
         self.output_layer = Linear(hidden_layer_width, num_outputs)
 
-        self.idx = tf.concat([tf.constant(range(3, 50)), tf.constant(range(51, 63))])
+        self.idx = tf.concat([tf.constant(range(3, 50)), tf.constant(range(51, 63))], axis = 0)[:, tf.newaxis]
 
     def __call__(self, x):
         z = tf.cast(x, 'float32')
@@ -63,8 +63,8 @@ class Reconstructor(tf.Module):
     def reformat(self, input):
         # input has shape batch, 57
         # Repeat the first index again (to force the 0-1 vector in a certain direction)
-        input = tf.concat([input[:, 0], input])
-        shape = tf.constant(input.shape[0], 63)
+        input = tf.transpose(tf.concat([input[:, 0][:, tf.newaxis], input], axis = 1))
+        shape = tf.constant([63, input.shape[1]])
         out = tf.scatter_nd(self.idx, input, shape)
         return out
 
@@ -74,14 +74,19 @@ def compute_joint_angles(coords, combinations):
     # Assume coords come in the shape [batch, num_coords, 3]
     # Assume combinations come in the shape [num_combs, 3]
     # Want to return angles of the form [batch, angles]
-
     # Compute vectors from coords indexed at the combinations
-    vecA = coords[:, combinations[:, 0]] - coords[:, combinations[:, 1]]
-    vecB = coords[:, combinations[:, 2]] - coords[:, combinations[:, 1]]
+    
+    coord_combs_0 = tf.gather(indices = combinations[:, 0], params = coords,  batch_dims = 0, axis = 1)
+    coord_combs_1 = tf.gather(indices = combinations[:, 1], params = coords,  batch_dims = 0, axis = 1)
+    coord_combs_2 = tf.gather(indices = combinations[:, 2], params = coords,  batch_dims = 0, axis = 1)
+    
+    vecA = coord_combs_0 - coord_combs_1
+    vecB = coord_combs_2 - coord_combs_1
 
     # Compute dot and cross products across the batch, num_combs dimensions
-    cos_theta = einsum(vecA, vecB, 'batch num_coords num_dim, batch num_coords num_dim -> batch num_coords')
-    sin_theta = tf.linalg.cross(vecA, vecB)
+    breakpoint()
+    cos_theta = einsum(vecA, vecB, 'batch num_coords num_dim, batch num_coords num_dim -> batch num_coords')/(tf.norm(vecA, axis = 2)*tf.norm(vecB, axis = 2))
+    sin_theta = tf.norm(tf.linalg.cross(vecA, vecB), axis = 2)/(tf.norm(vecA, axis = 2)*tf.norm(vecB, axis = 2))
 
     # Compute angles using atan2
     angles = tf.math.atan2(sin_theta, cos_theta)
@@ -94,9 +99,11 @@ if __name__ == "__main__":
 
     import matplotlib.pyplot as plt
     import yaml
+    import pandas as pd
+    import pickle
 
     from tqdm import trange
-
+    from itertools import combinations
     # Get some hyperparameters
     parser = argparse.ArgumentParser(
         prog="MLP",
@@ -117,6 +124,25 @@ if __name__ == "__main__":
     # Hence, we will actually need 21 x 3 - 3 - 2 - 1 = 57 outputs. Make sure to interpret the output accordingly. 
     
     num_inputs = 1330
-    num_outputs = 57
+    num_outputs = 58
     
     mlp = Reconstructor(num_inputs, num_outputs, num_hidden_layers, hidden_layer_width)
+    
+    # import a single nmf basis vector to test on
+    df = pd.read_csv("thesis/nmf_basis.csv")
+    test = df.iloc[:, 0:2]
+    test_tf = tf.constant(test.to_numpy())
+    test_tf = tf.transpose(test_tf)
+    sample_out = mlp(test_tf)
+    test_reformat = mlp.reformat(sample_out)
+    coords = tf.reshape(tf.transpose(test_reformat), [2, 21, 3])
+    # Set up combination vector so all the angles can be computed
+    landmarks = np.arange(21)
+    combos = tf.constant(np.array(list(combinations(landmarks, 3))))
+    test_angles = compute_joint_angles(coords, combos)
+    
+    file = open('dump.txt', 'wb')
+    pickle.dump(coords.numpy(), file)
+    file.close()
+    breakpoint()
+    
