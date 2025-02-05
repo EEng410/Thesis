@@ -1,7 +1,7 @@
 learning:
-  step_size: 0.005
-  batch_size: 200
-  num_epochs: 30
+  step_size: 0.001
+  batch_size: 128
+  num_epochs: 5
   decay_rate: 0.999
 data:
   num_samples: 500
